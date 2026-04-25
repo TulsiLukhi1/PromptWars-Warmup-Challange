@@ -1,0 +1,52 @@
+steps:
+# Build the Backend Docker Image
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-f', './backend/Dockerfile.prod', '-t', 'gcr.io/$PROJECT_ID/learning-assistant-backend', './backend']
+
+# Push the Backend Image to Container Registry
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['push', 'gcr.io/$PROJECT_ID/learning-assistant-backend']
+
+# Deploy Backend to Cloud Run
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  entrypoint: gcloud
+  args:
+  - 'run'
+  - 'deploy'
+  - 'learning-assistant-backend'
+  - '--image'
+  - 'gcr.io/$PROJECT_ID/learning-assistant-backend'
+  - '--region'
+  - 'us-central1'
+  - '--platform'
+  - 'managed'
+  - '--allow-unauthenticated'
+  - '--set-env-vars'
+  - 'GEMINI_API_KEY=AIzaSyDEom-tuCpEMjELiGdUEmBWqHv7Lael-Io'
+
+# Build the Frontend Docker Image
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-f', './frontend/Dockerfile.prod', '-t', 'gcr.io/$PROJECT_ID/learning-assistant-frontend', './frontend']
+
+# Push the Frontend Image to Container Registry
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['push', 'gcr.io/$PROJECT_ID/learning-assistant-frontend']
+
+# Deploy Frontend to Cloud Run
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  entrypoint: gcloud
+  args:
+  - 'run'
+  - 'deploy'
+  - 'learning-assistant-frontend'
+  - '--image'
+  - 'gcr.io/$PROJECT_ID/learning-assistant-frontend'
+  - '--region'
+  - 'us-central1'
+  - '--platform'
+  - 'managed'
+  - '--allow-unauthenticated'
+
+images:
+- 'gcr.io/$PROJECT_ID/learning-assistant-backend'
+- 'gcr.io/$PROJECT_ID/learning-assistant-frontend'

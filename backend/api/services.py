@@ -8,7 +8,7 @@ def get_ai_response(prompt: str) -> str:
         return "This is a stub response. Please configure a valid GEMINI_API_KEY."
     
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-flash-latest')
     
     try:
         response = model.generate_content(prompt)
@@ -61,7 +61,7 @@ RULES:
 }}
 """
 
-    model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json"})
+    model = genai.GenerativeModel('gemini-flash-latest', generation_config={"response_mime_type": "application/json"})
     
     try:
         response = model.generate_content(prompt)

@@ -19,3 +19,10 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 
 # Copy project
 COPY . /app/
+
+# Cloud Run expects the app to listen on the port defined by the PORT environment variable
+ENV PORT 8080
+EXPOSE $PORT
+
+# Start gunicorn
+CMD gunicorn core.wsgi:application --bind 0.0.0.0:$PORT
