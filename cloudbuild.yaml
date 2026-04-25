@@ -21,8 +21,6 @@ steps:
   - '--platform'
   - 'managed'
   - '--allow-unauthenticated'
-  - '--set-env-vars'
-  - 'GEMINI_API_KEY=AIzaSyDEom-tuCpEMjELiGdUEmBWqHv7Lael-Io'
   - '--timeout'
   - '300'
 
