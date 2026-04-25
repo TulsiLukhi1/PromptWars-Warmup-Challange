@@ -52,14 +52,19 @@ const EVAL_CONFIG = {
 function buildAssistantContent(data: LearnResponse, isInitial: boolean): string {
   const parts: string[] = [];
 
+  // On evaluation turns, lead with feedback (no label prefix — it shows as a badge separately)
   if (!isInitial && data.evaluation?.result && data.evaluation.result !== 'null') {
-    const cfg = EVAL_CONFIG[data.evaluation.result];
-    if (cfg.label) parts.push(`[${cfg.label}]  ${data.evaluation.feedback}`);
+    if (data.evaluation.feedback) parts.push(data.evaluation.feedback);
   }
 
+  // Core explanation — plain prose
   if (data.explanation) parts.push(data.explanation);
-  if (data.analogy)     parts.push(`💡 Analogy: ${data.analogy}`);
-  if (data.question)    parts.push(`❓ ${data.question}`);
+
+  // Analogy — integrated naturally, no emoji prefix
+  if (data.analogy) parts.push(`Think of it this way: ${data.analogy}`);
+
+  // Question — flows as the closing sentence, no ❓ prefix
+  if (data.question) parts.push(data.question);
 
   return parts.join('\n\n') || 'No response received.';
 }
@@ -192,7 +197,8 @@ export const ChatInterface: React.FC = () => {
     setTopicError('');
     setHasStarted(true);
 
-    addUserMessage(`I want to learn about "${trimmed}" at a ${level} level. Please guide me step-by-step.`);
+    // Just show the topic name — clean and natural, like typing in ChatGPT
+    addUserMessage(trimmed);
     await sendLearnRequest('', true);
   };
 
