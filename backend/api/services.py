@@ -1,21 +1,39 @@
+"""
+Adaptive Learning Service — powered by Google Gemini
+
+This module provides:
+  - get_ai_response()         : simple single-turn Q&A
+  - adaptive_learning_agent() : multi-turn, context-aware tutoring session
+
+Design principles
+-----------------
+* Single model configuration point (_get_model) — swap model names in one place.
+* Structured JSON output enforced by Gemini's response_mime_type.
+* Typed fallback dicts ensure the API layer always returns valid data.
+* All errors are caught and logged; the caller never sees a raw exception.
+"""
+
 import os
 import json
 import logging
+
 import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────
 # Internal helpers
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────
 
-def _get_model(response_mime_type: str | None = None):
+def _get_model(*, json_mode: bool = False) -> genai.GenerativeModel:
     """
-    Configures the Gemini SDK with the API key from the environment and
-    returns a ready-to-use GenerativeModel instance.
+    Configure the Gemini SDK and return a ready-to-use model.
+
+    Args:
+        json_mode: When True, instructs the model to return strict JSON.
 
     Raises:
-        EnvironmentError: If GEMINI_API_KEY is missing or invalid.
+        EnvironmentError: If GEMINI_API_KEY is missing or a placeholder.
     """
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key or api_key == "dummy_key_for_now":
@@ -25,34 +43,54 @@ def _get_model(response_mime_type: str | None = None):
 
     genai.configure(api_key=api_key)
 
-    generation_config = {}
-    if response_mime_type:
-        generation_config["response_mime_type"] = response_mime_type
+    generation_config: dict = {}
+    if json_mode:
+        generation_config["response_mime_type"] = "application/json"
 
-    return genai.GenerativeModel("gemini-flash-latest", generation_config=generation_config)
+    return genai.GenerativeModel(
+        "gemini-flash-latest",
+        generation_config=generation_config,
+    )
 
 
-# ---------------------------------------------------------------------------
-# Public service functions
-# ---------------------------------------------------------------------------
+def _make_error_response(step: int, message: str) -> dict:
+    """Return a safe fallback LearnResponse dict on any failure."""
+    return {
+        "step":        step,
+        "explanation": message,
+        "analogy":     "",
+        "question":    "",
+        "evaluation":  {"result": "null", "feedback": ""},
+        "next_action": "retry",
+        "learning_path": [],
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+# Public API
+# ─────────────────────────────────────────────────────────────
 
 def get_ai_response(prompt: str) -> str:
     """
-    Sends a plain text prompt to Gemini and returns the text response.
+    Send a plain-text prompt to Gemini and return the text response.
 
     Args:
-        prompt: The user's question or instruction.
+        prompt: The user's question or instruction (already validated).
 
     Returns:
-        The model's text response, or an error message string.
+        The model's plain-text answer, or an error string.
     """
     try:
         model = _get_model()
         response = model.generate_content(prompt)
+        logger.info("get_ai_response: %d input chars → %d output chars",
+                    len(prompt), len(response.text))
         return response.text
+
     except EnvironmentError as exc:
-        logger.error("API key not configured: %s", exc)
+        logger.error("API key error in get_ai_response: %s", exc)
         return str(exc)
+
     except Exception as exc:
         logger.exception("Unexpected error in get_ai_response")
         return f"Error communicating with AI: {exc}"
@@ -67,10 +105,16 @@ def adaptive_learning_agent(
     user_answer: str,
 ) -> dict:
     """
-    Drives a step-by-step adaptive learning session using Gemini.
+    Drive a step-by-step, context-aware tutoring session.
 
-    The model returns strict JSON conforming to the LearnResponse schema.
-    If parsing fails, a safe fallback dict is returned so the frontend
+    Decision logic (executed inside the model prompt):
+    - No learning_path yet  → generate 3–5 progressive steps and teach step 1.
+    - No user_answer        → teach the current step; ask exactly one question.
+    - user_answer provided  → evaluate the answer (correct / partial / incorrect);
+                              set next_action to advance / retry / simplify accordingly.
+
+    The model response is enforced as strict JSON via Gemini's response_mime_type.
+    If the JSON cannot be parsed a safe fallback dict is returned so the frontend
     never receives an unhandled exception.
 
     Args:
@@ -78,65 +122,122 @@ def adaptive_learning_agent(
         user_level:    'Beginner', 'Intermediate', or 'Advanced'.
         step_number:   Current step in the session (1-indexed).
         steps_array:   Previously generated learning path steps.
-        last_question: The question asked in the previous turn.
-        user_answer:   The user's answer to that question (empty on first turn).
+        last_question: The question asked in the previous turn (empty on first turn).
+        user_answer:   The user's reply to that question (empty on first turn).
 
     Returns:
-        A dict matching the LearnResponse schema.
+        A dict conforming to the LearnResponse schema.
     """
+    # ── Determine session phase ────────────────────────────
+    is_first_turn   = not steps_array
+    is_eval_turn    = bool(user_answer.strip())
+    phase_hint      = _phase_description(is_first_turn, is_eval_turn)
+    difficulty_hint = _difficulty_hint(user_level)
+
     prompt = f"""
-You are an Adaptive Learning Assistant. You help users learn concepts through step-by-step teaching.
+You are an expert Adaptive Learning Assistant powered by Google Gemini AI.
+Your role is to deliver a highly personalised, step-by-step tutoring experience.
 
-INPUT CONTEXT:
-- Topic: {topic}
-- User Level: {user_level}
-- Current Step: {step_number}
-- Learning Path: {json.dumps(steps_array)}
-- Last Question: {last_question}
-- User Answer: {user_answer}
+═══════════════════════════ SESSION CONTEXT ═══════════════════════════
+Topic        : {topic}
+Level        : {user_level}
+Current Step : {step_number}
+Learning Path: {json.dumps(steps_array) if steps_array else "(not yet generated)"}
+Last Question: {last_question or "(none — first turn)"}
+User Answer  : {user_answer  or "(none — awaiting first response)"}
+Phase        : {phase_hint}
+═══════════════════════════════════════════════════════════════════════
 
-RULES:
-1. If Learning Path is empty, generate 3 to 5 progressive learning steps.
-2. If User Answer is empty, teach the current step simply using a real-world analogy and ask exactly ONE question.
-3. If User Answer exists, evaluate it as 'correct', 'partial', or 'incorrect'. Provide feedback and decide next_action ('advance', 'retry', 'simplify').
-4. Keep the response concise, structured, interactive — no long paragraphs.
-5. YOU MUST RETURN ONLY STRICT JSON MATCHING THIS EXACT FORMAT:
+DECISION RULES — follow these exactly:
+
+1. GENERATE PATH (if Learning Path is empty):
+   • Analyse the topic and level.
+   • Create {difficulty_hint} learning steps as a concise array of step titles.
+   • Then immediately TEACH step 1.
+
+2. TEACH (if User Answer is empty):
+   • Explain the current step simply and clearly (3–5 sentences max).
+   • Provide ONE vivid real-world analogy that a {user_level} student can relate to.
+   • Ask exactly ONE specific, open-ended comprehension question.
+   • Set evaluation.result = "null".
+
+3. EVALUATE (if User Answer is provided):
+   • Compare the answer against what was taught in the last question.
+   • Rate strictly: "correct", "partial", or "incorrect".
+   • Provide short, encouraging, constructive feedback (1–2 sentences).
+   • Decide next_action:
+       - "advance"  → correct or strong partial answer
+       - "retry"    → partial or incorrect answer (retry same step)
+       - "simplify" → incorrect AND user seems confused (try a simpler explanation)
+   • If advancing, increment step by 1 in your response.
+
+STYLE RULES:
+• No markdown in explanation/analogy (plain prose only).
+• Question must end with a "?".
+• Keep all fields concise — no walls of text.
+• Adapt vocabulary strictly to the user's {user_level} level.
+
+RETURN ONLY THIS EXACT JSON — no extra text, no markdown wrapper:
 
 {{
-  "step": number,
-  "explanation": "string",
-  "analogy": "string",
-  "question": "string",
+  "step":     <current or next step number as integer>,
+  "explanation": "<plain text, 3–5 sentences>",
+  "analogy":     "<one vivid real-world analogy>",
+  "question":    "<one specific comprehension question ending with ?>",
   "evaluation": {{
-    "result": "correct/partial/incorrect/null",
-    "feedback": "string"
+    "result":   "<correct | partial | incorrect | null>",
+    "feedback": "<1–2 sentences of feedback, empty string on first teach>"
   }},
-  "next_action": "advance/retry/simplify"
+  "next_action":   "<advance | retry | simplify>",
+  "learning_path": [<array of step title strings>]
 }}
 """
 
-    _fallback = {
-        "step": step_number,
-        "explanation": "",
-        "analogy": "",
-        "question": "",
-        "evaluation": {"result": "null", "feedback": ""},
-        "next_action": "retry",
-    }
-
     try:
-        model = _get_model(response_mime_type="application/json")
+        model = _get_model(json_mode=True)
         response = model.generate_content(prompt)
-        return json.loads(response.text)
+
+        data = json.loads(response.text)
+
+        logger.info(
+            "adaptive_learning_agent: topic=%r level=%s step=%d→%s action=%s",
+            topic, user_level, step_number,
+            data.get("step"), data.get("next_action"),
+        )
+        return data
+
     except EnvironmentError as exc:
-        logger.error("API key not configured: %s", exc)
-        _fallback["explanation"] = str(exc)
-        return _fallback
+        logger.error("API key error in adaptive_learning_agent: %s", exc)
+        return _make_error_response(step_number, str(exc))
+
     except json.JSONDecodeError:
-        logger.error("Gemini returned non-JSON response")
-        _fallback["explanation"] = "Received an unexpected response from the AI. Please try again."
-        return _fallback
+        logger.error("Gemini returned non-JSON in adaptive_learning_agent")
+        return _make_error_response(
+            step_number,
+            "The AI returned an unexpected format. Please try again.",
+        )
+
     except Exception as exc:
         logger.exception("Unexpected error in adaptive_learning_agent")
-        _fallback["explanation"] = f"Error communicating with AI: {exc}"
-        return _fallback
+        return _make_error_response(step_number, f"Error communicating with AI: {exc}")
+
+
+# ─────────────────────────────────────────────────────────────
+# Private prompt-builder helpers
+# ─────────────────────────────────────────────────────────────
+
+def _phase_description(is_first_turn: bool, is_eval_turn: bool) -> str:
+    if is_first_turn:
+        return "SESSION START — generate learning path and teach step 1"
+    if is_eval_turn:
+        return "EVALUATION — assess user answer and decide next action"
+    return "TEACHING — explain current step and ask a question"
+
+
+def _difficulty_hint(user_level: str) -> str:
+    hints = {
+        "Beginner":     "3 foundational",
+        "Intermediate": "4 progressively challenging",
+        "Advanced":     "5 in-depth and nuanced",
+    }
+    return hints.get(user_level, "3 to 5")
