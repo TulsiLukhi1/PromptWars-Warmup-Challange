@@ -23,10 +23,20 @@ steps:
   - '--allow-unauthenticated'
   - '--set-env-vars'
   - 'GEMINI_API_KEY=AIzaSyDEom-tuCpEMjELiGdUEmBWqHv7Lael-Io'
+  - '--timeout'
+  - '300'
 
 # Build the Frontend Docker Image
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '-f', './frontend/Dockerfile.prod', '-t', 'gcr.io/$PROJECT_ID/learning-assistant-frontend', './frontend']
+  args:
+  - 'build'
+  - '-f'
+  - './frontend/Dockerfile.prod'
+  - '-t'
+  - 'gcr.io/$PROJECT_ID/learning-assistant-frontend'
+  - '--build-arg'
+  - 'VITE_API_URL=https://learning-assistant-backend-155431985566.us-central1.run.app'
+  - './frontend'
 
 # Push the Frontend Image to Container Registry
 - name: 'gcr.io/cloud-builders/docker'
