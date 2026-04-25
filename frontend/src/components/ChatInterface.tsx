@@ -42,18 +42,22 @@ const LEVEL_THEMES: Record<Level, { text: string; bg: string; border: string }> 
 // Professional Utility Components
 // ─────────────────────────────────────────────────────────────
 
-/** Simple Markdown-lite formatter to handle bold and newlines */
+/** Simple Markdown-lite formatter to handle bold, code snippets, and newlines */
 const FormattedContent: React.FC<{ text: string }> = ({ text }) => {
   if (!text) return null;
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {text.split('\n\n').map((para, i) => (
         <p key={i} className="leading-relaxed">
-          {para.split(/(\*\*.*?\*\*)/g).map((part, j) => 
-            part.startsWith('**') && part.endsWith('**') 
-              ? <strong key={j} className="text-white font-bold">{part.slice(2, -2)}</strong>
-              : part
-          )}
+          {para.split(/(\*\*.*?\*\*|`.*?`)/g).map((part, j) => {
+            if (part.startsWith('**') && part.endsWith('**')) {
+              return <strong key={j} className="text-white font-bold">{part.slice(2, -2)}</strong>;
+            }
+            if (part.startsWith('`') && part.endsWith('`')) {
+              return <code key={j} className="bg-white/10 px-1.5 py-0.5 rounded text-indigo-300 font-mono text-xs">{part.slice(1, -1)}</code>;
+            }
+            return part;
+          })}
         </p>
       ))}
     </div>
