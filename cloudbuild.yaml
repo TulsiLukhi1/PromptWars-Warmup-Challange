@@ -33,7 +33,7 @@ steps:
   - '-t'
   - 'gcr.io/$PROJECT_ID/learning-assistant-frontend'
   - '--build-arg'
-  - 'VITE_API_URL=https://learning-assistant-backend-155431985566.us-central1.run.app'
+  - 'VITE_API_URL=https://learning-assistant-backend-ixvr2n46oa-uc.a.run.app'
   - './frontend'
 
 # Push the Frontend Image to Container Registry
