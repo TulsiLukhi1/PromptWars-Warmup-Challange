@@ -145,7 +145,7 @@ export const ChatInterface: React.FC = () => {
     };
     setMessages([userMsg]);
     
-    await executeAIQuery('', true);
+    await executeAIQuery('');
   };
 
   const handleSend = async (e: React.FormEvent) => {
@@ -162,10 +162,10 @@ export const ChatInterface: React.FC = () => {
 
     setMessages(prev => [...prev, userMsg]);
     setInput('');
-    await executeAIQuery(trimmed, false);
+    await executeAIQuery(trimmed);
   };
 
-  const executeAIQuery = async (userAnswer: string, isInitial: boolean) => {
+  const executeAIQuery = async (userAnswer: string) => {
     setIsLoading(true);
     setLastEval(null);
 
@@ -223,7 +223,6 @@ export const ChatInterface: React.FC = () => {
   };
 
   // 3. Render Helpers
-  const currentTheme = LEVEL_THEMES[level];
 
   return (
     <div className="flex flex-col h-[75vh] glass rounded-3xl border border-white/10 shadow-2xl overflow-hidden animate-fade-in-up">
