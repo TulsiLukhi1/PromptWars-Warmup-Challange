@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import type { ChatMessage } from '../types';
 
 // ─────────────────────────────────────────────────────────────
-// Types
+// Types & Interfaces
 // ─────────────────────────────────────────────────────────────
 
 interface Evaluation {
@@ -21,58 +21,48 @@ interface LearnResponse {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Constants
+// Constants & Configuration
 // ─────────────────────────────────────────────────────────────
 
-const MAX_TOPIC_LENGTH  = 200;
-const MAX_ANSWER_LENGTH = 1000;
-const TOTAL_STEPS       = 5;          // expected session length for progress bar
-const API_BASE_URL      = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const MAX_TOPIC_LENGTH = 150;
+const MAX_ANSWER_LENGTH = 1500;
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const STORAGE_KEY = 'learn_ai_session_v1';
 
 const LEVELS = ['Beginner', 'Intermediate', 'Advanced'] as const;
 type Level = typeof LEVELS[number];
 
-const LEVEL_COLORS: Record<Level, string> = {
-  Beginner:     'text-emerald-400 bg-emerald-400/10 border-emerald-400/30',
-  Intermediate: 'text-amber-400   bg-amber-400/10   border-amber-400/30',
-  Advanced:     'text-rose-400    bg-rose-400/10    border-rose-400/30',
-};
-
-const EVAL_CONFIG = {
-  correct:   { label: '✓ Correct',  cls: 'badge-correct' },
-  partial:   { label: '~ Partial',  cls: 'badge-partial' },
-  incorrect: { label: '✗ Incorrect', cls: 'badge-incorrect' },
-  null:      { label: '',            cls: '' },
+const LEVEL_THEMES: Record<Level, { text: string; bg: string; border: string }> = {
+  Beginner: { text: 'text-emerald-400', bg: 'bg-emerald-400/10', border: 'border-emerald-400/30' },
+  Intermediate: { text: 'text-amber-400', bg: 'bg-amber-400/10', border: 'border-amber-400/30' },
+  Advanced: { text: 'text-rose-400', bg: 'bg-rose-400/10', border: 'border-rose-400/30' },
 };
 
 // ─────────────────────────────────────────────────────────────
-// Helper: build readable message from AI response
+// Professional Utility Components
 // ─────────────────────────────────────────────────────────────
 
-function buildAssistantContent(data: LearnResponse, isInitial: boolean): string {
-  const parts: string[] = [];
+/** Simple Markdown-lite formatter to handle bold and newlines */
+const FormattedContent: React.FC<{ text: string }> = ({ text }) => {
+  if (!text) return null;
+  return (
+    <div className="space-y-3">
+      {text.split('\n\n').map((para, i) => (
+        <p key={i} className="leading-relaxed">
+          {para.split(/(\*\*.*?\*\*)/g).map((part, j) => 
+            part.startsWith('**') && part.endsWith('**') 
+              ? <strong key={j} className="text-white font-bold">{part.slice(2, -2)}</strong>
+              : part
+          )}
+        </p>
+      ))}
+    </div>
+  );
+};
 
-  // On eval turns: show the feedback text first (badge is shown separately in the UI)
-  if (!isInitial && data.evaluation?.result && data.evaluation.result !== 'null') {
-    if (data.evaluation.feedback) parts.push(data.evaluation.feedback);
-  }
-
-  // The explanation is ONE complete natural conversational response.
-  // The AI is instructed to weave the analogy and question INTO it naturally.
-  // We never display analogy/question as separate concatenated blocks.
-  if (data.explanation) parts.push(data.explanation);
-
-  return parts.join('\n\n') || 'No response received.';
-}
-
-// ─────────────────────────────────────────────────────────────
-// Sub-components
-// ─────────────────────────────────────────────────────────────
-
-/** Animated three-dot typing indicator */
 const TypingIndicator: React.FC = () => (
-  <div className="flex justify-start animate-fade-in">
-    <div className="bubble-ai rounded-2xl rounded-bl-sm px-4 py-3 flex items-center gap-1.5">
+  <div className="flex justify-start animate-fade-in py-2">
+    <div className="bubble-ai rounded-2xl rounded-bl-sm px-5 py-3 flex items-center gap-1.5 shadow-lg border border-white/5">
       <div className="typing-dot" />
       <div className="typing-dot" />
       <div className="typing-dot" />
@@ -80,146 +70,98 @@ const TypingIndicator: React.FC = () => (
   </div>
 );
 
-/** Single chat message bubble */
-const MessageBubble: React.FC<{ msg: ChatMessage; evalResult?: Evaluation }> = ({ msg, evalResult }) => {
-  const isUser = msg.role === 'user';
-  const evalCfg = evalResult && evalResult.result !== 'null'
-    ? EVAL_CONFIG[evalResult.result as keyof typeof EVAL_CONFIG]
-    : null;
-
-  return (
-    <article
-      className={`flex ${isUser ? 'justify-end animate-slide-in-right' : 'justify-start animate-slide-in-left'}`}
-    >
-      {/* AI avatar */}
-      {!isUser && (
-        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#667eea] to-[#764ba2] flex items-center justify-center mr-2 mt-1 flex-shrink-0 shadow-md">
-          <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-          </svg>
-        </div>
-      )}
-
-      <div className={`max-w-[78%] ${isUser ? 'items-end' : 'items-start'} flex flex-col gap-1`}>
-        {/* Evaluation badge (AI messages only) */}
-        {!isUser && evalCfg && evalCfg.label && (
-          <span className={`badge ${evalCfg.cls}`}>{evalCfg.label}</span>
-        )}
-
-        <div className={`rounded-2xl px-4 py-3 ${isUser ? 'bubble-user rounded-br-sm text-white' : 'bubble-ai rounded-bl-sm text-slate-200'}`}>
-          <p className="whitespace-pre-wrap leading-relaxed text-sm font-medium">{msg.content}</p>
-        </div>
-
-        <time className={`text-[11px] ${isUser ? 'text-slate-500 text-right' : 'text-slate-600'}`}>
-          {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-        </time>
-      </div>
-
-      {/* User avatar */}
-      {isUser && (
-        <div className="w-8 h-8 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center ml-2 mt-1 flex-shrink-0">
-          <svg className="w-4 h-4 text-slate-300" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-          </svg>
-        </div>
-      )}
-    </article>
-  );
-};
-
-/** Learning progress bar */
-const ProgressBar: React.FC<{ step: number; topic: string; level: Level }> = ({ step, topic, level }) => {
-  const pct = Math.min((step / TOTAL_STEPS) * 100, 100);
-  return (
-    <div className="px-4 py-3 glass border-b border-white/5 animate-fade-in">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-xs text-slate-400 font-medium truncate">
-            📖 {topic}
-          </span>
-          <span className={`badge border text-[10px] ${LEVEL_COLORS[level]}`}>{level}</span>
-        </div>
-        <span className="text-xs text-slate-500 flex-shrink-0 ml-2">
-          Step {step} · {Math.round(pct)}%
-        </span>
-      </div>
-      <div className="progress-track">
-        <div className="progress-fill" style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-};
-
 // ─────────────────────────────────────────────────────────────
-// Main component
+// Main Application Component
 // ─────────────────────────────────────────────────────────────
 
 export const ChatInterface: React.FC = () => {
-  const [topic,      setTopic     ] = useState('');
-  const [level,      setLevel     ] = useState<Level>('Beginner');
-  const [messages,   setMessages  ] = useState<ChatMessage[]>([]);
-  const [input,      setInput     ] = useState('');
-  const [isLoading,  setIsLoading ] = useState(false);
-  const [topicError, setTopicError] = useState('');
+  // Session State
+  const [topic, setTopic] = useState('');
+  const [level, setLevel] = useState<Level>('Beginner');
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
-
-  // Session context — kept in state so every API call sends full context
-  const [step,         setStep        ] = useState(1);
+  
+  // Logical Context
+  const [step, setStep] = useState(1);
   const [learningPath, setLearningPath] = useState<string[]>([]);
   const [lastQuestion, setLastQuestion] = useState('');
-  const [lastEval,     setLastEval    ] = useState<Evaluation | null>(null);
+  const [lastEval, setLastEval] = useState<Evaluation | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom on new messages
+  // 1. Persistence Engine (Senior Dev Best Practice)
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const data = JSON.parse(saved);
+        setTopic(data.topic);
+        setLevel(data.level);
+        // Map strings back to Date objects for timestamps
+        setMessages(data.messages.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) })));
+        setHasStarted(true);
+        setStep(data.step);
+        setLearningPath(data.learningPath);
+        setLastQuestion(data.lastQuestion);
+        setLastEval(data.lastEval);
+      } catch (e) {
+        console.error('Failed to restore session:', e);
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (hasStarted) {
+      const state = { topic, level, messages, step, learningPath, lastQuestion, lastEval };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
+  }, [messages, step, hasStarted]);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
 
-  // ── Handlers ──────────────────────────────────────────────
-
+  // 2. Logic Handlers
   const startLearning = async (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = topic.trim();
-
-    if (!trimmed) {
-      setTopicError('Please enter a topic to study.');
-      return;
-    }
-    if (trimmed.length > MAX_TOPIC_LENGTH) {
-      setTopicError(`Topic must be under ${MAX_TOPIC_LENGTH} characters.`);
-      return;
-    }
-    setTopicError('');
+    if (!topic.trim()) return;
+    
     setHasStarted(true);
-
-    // Just show the topic name — clean and natural, like typing in ChatGPT
-    addUserMessage(trimmed);
-    await sendLearnRequest('', true);
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = input.trim();
-    if (!trimmed || isLoading || !hasStarted) return;
-
-    setInput('');
-    addUserMessage(trimmed);
-    await sendLearnRequest(trimmed, false);
-  };
-
-  // ── Helpers ───────────────────────────────────────────────
-
-  const addUserMessage = (content: string) => {
-    setMessages(prev => [...prev, {
+    const initialInput = topic.trim();
+    
+    // Add user's topic choice as first message
+    const userMsg: ChatMessage = {
       id: String(Date.now()),
       role: 'user',
-      content,
+      content: initialInput,
       timestamp: new Date(),
-    }]);
+    };
+    setMessages([userMsg]);
+    
+    await executeAIQuery('', true);
   };
 
-  const sendLearnRequest = async (userAnswer: string, isInitial: boolean) => {
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = input.trim();
+    if (!trimmed || isLoading) return;
+
+    const userMsg: ChatMessage = {
+      id: String(Date.now()),
+      role: 'user',
+      content: trimmed,
+      timestamp: new Date(),
+    };
+
+    setMessages(prev => [...prev, userMsg]);
+    setInput('');
+    await executeAIQuery(trimmed, false);
+  };
+
+  const executeAIQuery = async (userAnswer: string, isInitial: boolean) => {
     setIsLoading(true);
     setLastEval(null);
 
@@ -228,220 +170,201 @@ export const ChatInterface: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          topic:         topic.trim(),
-          user_level:    level,
+          topic: topic.trim(),
+          user_level: level,
           step,
           learning_path: learningPath,
           last_question: lastQuestion,
-          user_answer:   userAnswer,
+          user_answer: userAnswer,
         }),
       });
 
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error((err as { error?: string }).error || `Server error ${response.status}`);
-      }
+      if (!response.ok) throw new Error('System connectivity issue. Retrying...');
 
       const data: LearnResponse = await response.json();
 
-      // Update session context
-      if (data.learning_path?.length) setLearningPath(data.learning_path);
-      setStep(data.step ?? step);
-      setLastQuestion(data.question ?? '');
-      if (data.evaluation) setLastEval(data.evaluation);
+      // Update state based on AI's logic
+      setStep(data.step);
+      if (data.learning_path) setLearningPath(data.learning_path);
+      setLastQuestion(data.question);
+      setLastEval(data.evaluation);
 
-      const content = buildAssistantContent(data, isInitial);
-      setMessages(prev => [...prev, {
-        id:        String(Date.now() + 1),
-        role:      'assistant',
-        content,
+      const aiMsg: ChatMessage = {
+        id: String(Date.now() + 1),
+        role: 'assistant',
+        content: data.explanation,
         timestamp: new Date(),
-      }]);
+      };
 
+      setMessages(prev => [...prev, aiMsg]);
     } catch (error) {
-      const isNetwork = error instanceof TypeError;
-      const text = isNetwork
-        ? '⚠️ Could not reach the server. Please check your connection.'
-        : `⚠️ ${(error as Error).message || 'Something went wrong. Please try again.'}`;
-
-      console.error('[ChatInterface]', error);
-      setMessages(prev => [...prev, {
-        id:        String(Date.now() + 1),
-        role:      'assistant',
-        content:   text,
+      console.error('AI Service Error:', error);
+      const errorMsg: ChatMessage = {
+        id: String(Date.now() + 1),
+        role: 'assistant',
+        content: "I'm having trouble connecting to my servers. Let's try that again in a moment.",
         timestamp: new Date(),
-      }]);
+      };
+      setMessages(prev => [...prev, errorMsg]);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // ── Render ────────────────────────────────────────────────
+  const resetSession = () => {
+    if (window.confirm('Clear this session and start over?')) {
+      localStorage.removeItem(STORAGE_KEY);
+      window.location.reload();
+    }
+  };
+
+  // 3. Render Helpers
+  const currentTheme = LEVEL_THEMES[level];
 
   return (
-    <div className="glass rounded-2xl border border-white/8 overflow-hidden shadow-2xl glow-purple animate-fade-in-up" style={{ minHeight: '65vh', display: 'flex', flexDirection: 'column' }}>
-
-      {/* ── Header ──────────────────────────────────────────── */}
-      <header className="glass-dark border-b border-white/6 px-6 py-4">
-        <div className="flex items-center justify-between">
+    <div className="flex flex-col h-[75vh] glass rounded-3xl border border-white/10 shadow-2xl overflow-hidden animate-fade-in-up">
+      {/* ── Header ── */}
+      <header className="glass-dark border-b border-white/5 px-6 py-4 flex items-center justify-between z-10">
+        <div className="flex items-center gap-3">
+          <div className={`w-2.5 h-2.5 rounded-full ${isLoading ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
           <div>
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-[#667eea] animate-pulse-glow inline-block"></span>
-              Adaptive Learning Assistant
+            <h2 className="text-sm font-bold text-white tracking-wide uppercase">
+              {hasStarted ? `Tutoring: ${topic}` : 'New Learning Session'}
             </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Context-aware tutoring powered by Google Gemini
+            <p className="text-[10px] text-slate-500 font-medium">
+              V2.0 · PRODUCTION · {level} Mode
             </p>
           </div>
-          {hasStarted && (
-            <button
-              onClick={() => {
-                setHasStarted(false);
-                setMessages([]);
-                setTopic('');
-                setStep(1);
-                setLearningPath([]);
-                setLastQuestion('');
-                setLastEval(null);
-              }}
-              className="text-xs text-slate-500 hover:text-slate-300 border border-white/10 hover:border-white/20 rounded-lg px-3 py-1.5 transition-all"
-            >
-              New Session
-            </button>
-          )}
         </div>
+        
+        {hasStarted && (
+          <button 
+            onClick={resetSession}
+            className="text-[11px] font-bold text-slate-400 hover:text-white transition-colors flex items-center gap-1.5"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+            Reset
+          </button>
+        )}
       </header>
 
-      {/* ── Topic Setup Form (shown before session starts) ─── */}
-      {!hasStarted && (
-        <div className="flex-1 flex items-center justify-center p-6 animate-fade-in">
-          <div className="w-full max-w-lg">
-            <div className="text-center mb-8">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#667eea] to-[#764ba2] flex items-center justify-center mx-auto mb-4 shadow-lg animate-pulse-glow">
-                <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-                </svg>
+      {/* ── Setup Phase ── */}
+      {!hasStarted ? (
+        <div className="flex-1 flex items-center justify-center p-8">
+          <div className="w-full max-w-md space-y-8 animate-fade-in">
+            <div className="text-center">
+              <div className="inline-flex p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 mb-6">
+                <svg className="w-10 h-10 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
               </div>
-              <h3 className="text-xl font-bold text-white mb-1">What do you want to master?</h3>
-              <p className="text-slate-500 text-sm">Choose a topic and your experience level to begin your personalized learning journey.</p>
+              <h1 className="text-2xl font-black text-white mb-2">Build Your Knowledge</h1>
+              <p className="text-slate-400 text-sm">Target any subject. Our AI agent will craft a personalized roadmap based on your current expertise.</p>
             </div>
 
-            <form onSubmit={startLearning} className="space-y-4" noValidate>
-              {/* Topic input */}
-              <div>
-                <label htmlFor="topic-input" className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                  Topic
-                </label>
-                <input
-                  id="topic-input"
+            <form onSubmit={startLearning} className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Learning Target</label>
+                <input 
                   type="text"
+                  placeholder="e.g., Deep Learning, Medieval History, Baking..."
                   value={topic}
-                  onChange={(e) => { setTopic(e.target.value); if (topicError) setTopicError(''); }}
-                  placeholder="e.g. Python async/await, Quantum mechanics, JavaScript closures…"
-                  maxLength={MAX_TOPIC_LENGTH}
-                  className={`input-dark w-full rounded-xl px-4 py-3 text-sm ${topicError ? '!border-rose-500' : ''}`}
-                  aria-describedby={topicError ? 'topic-error' : undefined}
+                  onChange={(e) => setTopic(e.target.value.slice(0, MAX_TOPIC_LENGTH))}
+                  className="input-dark w-full px-5 py-4 rounded-2xl text-base shadow-inner focus:scale-[1.01] transition-transform"
                   autoFocus
                 />
-                <div className="flex justify-between mt-1.5">
-                  {topicError
-                    ? <p id="topic-error" role="alert" className="text-rose-400 text-xs">{topicError}</p>
-                    : <span />}
-                  <span className="text-slate-600 text-xs">{topic.length}/{MAX_TOPIC_LENGTH}</span>
-                </div>
               </div>
 
-              {/* Level selector */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                  Experience Level
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {LEVELS.map((lvl) => (
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Complexity Level</label>
+                <div className="grid grid-cols-3 gap-3">
+                  {LEVELS.map(l => (
                     <button
-                      key={lvl}
+                      key={l}
                       type="button"
-                      onClick={() => setLevel(lvl)}
-                      className={`rounded-xl py-2.5 text-sm font-semibold border transition-all ${
-                        level === lvl
-                          ? `${LEVEL_COLORS[lvl]} scale-[1.02]`
-                          : 'border-white/8 text-slate-500 hover:border-white/15 hover:text-slate-300'
-                      }`}
+                      onClick={() => setLevel(l)}
+                      className={`py-3 rounded-xl text-xs font-bold border transition-all ${level === l ? `${LEVEL_THEMES[l].text} ${LEVEL_THEMES[l].bg} ${LEVEL_THEMES[l].border} scale-105 shadow-lg` : 'border-white/5 text-slate-500 hover:bg-white/5'}`}
                     >
-                      {lvl}
+                      {l}
                     </button>
                   ))}
                 </div>
               </div>
 
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="btn-primary w-full py-3 text-sm mt-2"
-              >
-                {isLoading ? 'Starting…' : '🚀 Start Learning'}
+              <button type="submit" className="btn-primary w-full py-4 text-sm font-black uppercase tracking-widest shadow-xl">
+                Initialize Agent
               </button>
             </form>
           </div>
         </div>
-      )}
+      ) : (
+        /* ── Active Session Phase ── */
+        <>
+          {/* Progress Bar */}
+          <div className="px-6 py-3 bg-white/2 border-b border-white/5 flex items-center gap-4">
+            <div className="flex-1 bg-white/5 rounded-full h-1.5 overflow-hidden">
+              <div 
+                className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-1000 ease-out shimmer" 
+                style={{ width: `${Math.min((step/5)*100, 100)}%` }} 
+              />
+            </div>
+            <span className="text-[10px] font-black text-slate-500 whitespace-nowrap">STEP {step} / 5</span>
+          </div>
 
-      {/* ── Progress bar (during session) ─────────────────── */}
-      {hasStarted && <ProgressBar step={step} topic={topic} level={level} />}
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto p-6 space-y-8 scroll-smooth">
+            {messages.map((m, i) => (
+              <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in`}>
+                <div className={`max-w-[85%] sm:max-w-[75%] space-y-1 ${m.role === 'user' ? 'items-end' : 'items-start'} flex flex-col`}>
+                  
+                  {/* Evaluation Badge for Assistant */}
+                  {m.role === 'assistant' && i === messages.length - 1 && lastEval?.result !== 'null' && (
+                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-tighter mb-1 border ${
+                      lastEval?.result === 'correct' ? 'text-emerald-400 border-emerald-400/30 bg-emerald-400/5' : 
+                      lastEval?.result === 'partial' ? 'text-amber-400 border-amber-400/30 bg-amber-400/5' : 
+                      'text-rose-400 border-rose-400/30 bg-rose-400/5'
+                    }`}>
+                      {lastEval?.result}
+                    </span>
+                  )}
 
-      {/* ── Messages ─────────────────────────────────────── */}
-      {hasStarted && (
-        <div className="flex-1 overflow-y-auto p-5 space-y-4" style={{ minHeight: '280px' }}>
-          {messages.map((msg, idx) => (
-            <MessageBubble
-              key={msg.id}
-              msg={msg}
-              evalResult={msg.role === 'assistant' && idx === messages.length - 1 ? lastEval ?? undefined : undefined}
-            />
-          ))}
-          {isLoading && <TypingIndicator />}
-          <div ref={messagesEndRef} />
-        </div>
-      )}
+                  <div className={`px-5 py-4 rounded-3xl text-sm leading-relaxed ${
+                    m.role === 'user' 
+                      ? 'bg-indigo-600 text-white rounded-tr-none shadow-lg' 
+                      : 'glass-dark text-slate-200 border border-white/5 rounded-tl-none shadow-sm'
+                  }`}>
+                    <FormattedContent text={m.content} />
+                  </div>
+                  
+                  <span className="text-[9px] text-slate-600 font-bold mt-1 px-1">
+                    {m.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+              </div>
+            ))}
+            {isLoading && <TypingIndicator />}
+            <div ref={messagesEndRef} />
+          </div>
 
-      {/* ── Input bar (during session) ─────────────────── */}
-      {hasStarted && (
-        <footer className="glass-dark border-t border-white/6 px-4 py-4">
-          <form onSubmit={handleSubmit} className="flex gap-3 items-end">
-            <div className="flex-1">
-              <label htmlFor="chat-input" className="sr-only">Type your answer</label>
-              <input
-                id="chat-input"
+          {/* Footer Input */}
+          <footer className="p-4 bg-black/20 border-t border-white/5">
+            <form onSubmit={handleSend} className="max-w-4xl mx-auto flex gap-3">
+              <input 
                 type="text"
+                placeholder={isLoading ? "Agent is processing context..." : "Share your thoughts or answer the question..."}
                 value={input}
                 onChange={(e) => setInput(e.target.value.slice(0, MAX_ANSWER_LENGTH))}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(e as unknown as React.FormEvent); } }}
-                placeholder={isLoading ? 'AI is thinking…' : 'Type your answer or ask a question…'}
-                maxLength={MAX_ANSWER_LENGTH}
                 disabled={isLoading}
-                className="input-dark w-full rounded-xl px-4 py-3 text-sm"
+                className="flex-1 input-dark px-6 py-4 rounded-2xl text-sm focus:bg-white/10 transition-colors"
               />
-              {input.length > MAX_ANSWER_LENGTH * 0.8 && (
-                <p className="text-slate-600 text-xs mt-1 text-right">
-                  {input.length}/{MAX_ANSWER_LENGTH}
-                </p>
-              )}
-            </div>
-
-            <button
-              type="submit"
-              disabled={isLoading || !input.trim()}
-              aria-label="Send message"
-              className="btn-primary px-4 py-3 rounded-xl flex-shrink-0 flex items-center gap-2 text-sm"
-            >
-              {isLoading
-                ? <svg className="w-4 h-4 animate-spin-slow" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-                : <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/></svg>
-              }
-              <span className="hidden sm:inline">{isLoading ? 'Thinking' : 'Send'}</span>
-            </button>
-          </form>
-        </footer>
+              <button 
+                type="submit" 
+                disabled={isLoading || !input.trim()}
+                className="p-4 bg-white/5 hover:bg-white/10 rounded-2xl border border-white/5 text-white transition-all disabled:opacity-20"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
+              </button>
+            </form>
+          </footer>
+        </>
       )}
     </div>
   );
