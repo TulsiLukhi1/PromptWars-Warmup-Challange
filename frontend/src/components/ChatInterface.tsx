@@ -52,19 +52,15 @@ const EVAL_CONFIG = {
 function buildAssistantContent(data: LearnResponse, isInitial: boolean): string {
   const parts: string[] = [];
 
-  // On evaluation turns, lead with feedback (no label prefix — it shows as a badge separately)
+  // On eval turns: show the feedback text first (badge is shown separately in the UI)
   if (!isInitial && data.evaluation?.result && data.evaluation.result !== 'null') {
     if (data.evaluation.feedback) parts.push(data.evaluation.feedback);
   }
 
-  // Core explanation — plain prose
+  // The explanation is ONE complete natural conversational response.
+  // The AI is instructed to weave the analogy and question INTO it naturally.
+  // We never display analogy/question as separate concatenated blocks.
   if (data.explanation) parts.push(data.explanation);
-
-  // Analogy — integrated naturally, no emoji prefix
-  if (data.analogy) parts.push(`Think of it this way: ${data.analogy}`);
-
-  // Question — flows as the closing sentence, no ❓ prefix
-  if (data.question) parts.push(data.question);
 
   return parts.join('\n\n') || 'No response received.';
 }
