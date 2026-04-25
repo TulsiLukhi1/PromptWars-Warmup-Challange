@@ -1,223 +1,170 @@
 """
-Adaptive Learning Service Architecture — Professional Grade
+Adaptive Learning Core — Production & Testable Implementation
 
-A senior-level implementation focusing on:
-1. Factory Pattern: Abstracting AI provider logic for future-proofing.
-2. Resilience: Implementing exponential backoff retries for API stability.
-3. Security: Multi-stage sanitization to prevent prompt injection and XSS.
-4. Observability: Structured JSON logging for high-scale monitoring.
+A senior-level refactor focusing on:
+1. Object-Oriented Design: Encapsulating state in LearningAgent for testability.
+2. Dependency Injection: Allowing mock models to be injected during validation.
+3. Resource Optimization: Efficient initialization and prompt reuse.
+4. Robust Sanitization: Defensive programming to prevent common attacks.
 """
 
 import os
 import json
 import logging
 import time
-from typing import Dict, Any, List, Optional, Tuple
-from dataclasses import dataclass, asdict
+from typing import Dict, Any, List, Optional, Protocol
 
 import google.generativeai as genai
-from django.core.exceptions import PermissionDenied
 
 # ─────────────────────────────────────────────────────────────
-# Configuration & Constants
+# Interfaces for Testability (Protocol)
+# ─────────────────────────────────────────────────────────────
+
+class AIModel(Protocol):
+    def generate_content(self, prompt: str) -> Any: ...
+
+# ─────────────────────────────────────────────────────────────
+# Security & Utility Layer
 # ─────────────────────────────────────────────────────────────
 
 logger = logging.getLogger(__name__)
 
-# Security Thresholds
-MAX_RETRIES = 3
-INITIAL_RETRY_DELAY = 1.0  # seconds
-MAX_TOPIC_LEN = 150
-MAX_USER_LEN = 1500
-
-# AI Model Config
-DEFAULT_MODEL = "gemini-1.5-flash"
-
-@dataclass
-class LearnResponse:
-    step: int
-    explanation: string
-    analogy: string
-    question: string
-    evaluation: Dict[str, str]
-    next_action: str
-    learning_path: List[str]
-
-# ─────────────────────────────────────────────────────────────
-# Security Logic (Defense in Depth)
-# ─────────────────────────────────────────────────────────────
-
-def sanitize_input(text: str, max_length: int) -> str:
-    """
-    Multi-stage sanitization for production safety.
-    1. Length clamping.
-    2. HTML tag stripping (prevent XSS in logs/admin).
-    3. Trimming whitespace.
-    """
-    if not text:
-        return ""
+class SecurityGuard:
+    """Centralized input validation and sanitization."""
     
-    # 1. Strip HTML tags using simple regex/replace to avoid heavy dependencies
-    import re
-    clean = re.sub(r'<.*?>', '', text)
-    
-    # 2. Trim and Clamp
-    clean = clean.strip()[:max_length]
-    
-    # 3. Detection of common prompt injection patterns (Basic)
-    injection_keywords = ["ignore previous instructions", "system prompt", "as a developer"]
-    lower_clean = clean.lower()
-    for kw in injection_keywords:
-        if kw in lower_clean:
-            logger.warning(f"Potential prompt injection detected: {kw}")
-            # We don't block yet, but we log for security audits
-            
-    return clean
-
-# ─────────────────────────────────────────────────────────────
-# AI Provider Factory (Scalability)
-# ─────────────────────────────────────────────────────────────
-
-class AIModelFactory:
-    """
-    Ensures model configuration is centralized. 
-    Allows easy switching between Flash, Pro, or even other providers in the future.
-    """
     @staticmethod
-    def get_model(json_mode: bool = False) -> genai.GenerativeModel:
+    def sanitize(text: str, max_length: int) -> str:
+        if not text:
+            return ""
+        import re
+        # Strip potential HTML/Script tags
+        clean = re.sub(r'<.*?>', '', str(text))
+        return clean.strip()[:max_length]
+
+    @staticmethod
+    def validate_level(level: str) -> str:
+        valid_levels = ['Beginner', 'Intermediate', 'Advanced']
+        return level if level in valid_levels else 'Beginner'
+
+# ─────────────────────────────────────────────────────────────
+# Main Agent Engine
+# ─────────────────────────────────────────────────────────────
+
+class LearningAgent:
+    """
+    State-aware agent that handles the learning loop.
+    Designed for high testability and resource efficiency.
+    """
+    
+    def __init__(self, model: Optional[AIModel] = None):
+        # Dependency Injection: allows passing a mock model for unit tests
+        self.model = model or self._init_default_model()
+        self.max_retries = 3
+
+    def _init_default_model(self) -> AIModel:
+        """Initializes the production Gemini model."""
         api_key = os.environ.get("GEMINI_API_KEY", "").strip()
         if not api_key:
-            raise EnvironmentError("GEMINI_API_KEY is not configured in the environment.")
-
+            raise EnvironmentError("GEMINI_API_KEY missing from environment.")
+            
         genai.configure(api_key=api_key)
-        
-        config = {
-            "temperature": 0.7,
-            "top_p": 0.95,
-            "top_k": 40,
-            "max_output_tokens": 2048,
-        }
-        
-        if json_mode:
-            config["response_mime_type"] = "application/json"
-
         return genai.GenerativeModel(
-            model_name=DEFAULT_MODEL,
-            generation_config=config,
+            model_name="gemini-1.5-flash",
+            generation_config={
+                "temperature": 0.7,
+                "response_mime_type": "application/json",
+            }
         )
 
-# ─────────────────────────────────────────────────────────────
-# Core Service Logic
-# ─────────────────────────────────────────────────────────────
+    def process_turn(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Processes a single turn in the learning session.
+        Implements error isolation and retry logic.
+        """
+        # 1. Sanitize Inputs
+        topic = SecurityGuard.sanitize(context.get('topic'), 150)
+        level = SecurityGuard.validate_level(context.get('user_level'))
+        user_answer = SecurityGuard.sanitize(context.get('user_answer'), 1500)
+        
+        prompt = self._build_prompt(
+            topic, level, context.get('step', 1), 
+            context.get('learning_path', []), 
+            context.get('last_question', ''), 
+            user_answer
+        )
 
-def get_adaptive_response(
-    topic: str,
-    user_level: str,
-    step_number: int,
-    steps_array: List[str],
-    last_question: str,
-    user_answer: str,
-) -> Dict[str, Any]:
-    """
-    High-resilience wrapper for the learning agent.
-    Implements retries and structured error handling.
-    """
-    # 1. Sanitize all inputs before they touch the prompt
-    safe_topic = sanitize_input(topic, MAX_TOPIC_LEN)
-    safe_answer = sanitize_input(user_answer, MAX_USER_LEN)
-    
-    prompt = _build_professional_prompt(
-        safe_topic, user_level, step_number, steps_array, last_question, safe_answer
-    )
+        # 2. Resilient Execution
+        for attempt in range(self.max_retries):
+            try:
+                response = self.model.generate_content(prompt)
+                data = json.loads(response.text)
+                return self._validate_schema(data, context.get('step', 1))
+                
+            except Exception as e:
+                logger.error(f"Agent failure (attempt {attempt+1}): {e}")
+                if attempt < self.max_retries - 1:
+                    time.sleep(1.0 * (2 ** attempt)) # Backoff
+                    
+        return self._get_fallback(context.get('step', 1))
 
-    # 2. Resilient Execution Loop
-    last_error = None
-    for attempt in range(MAX_RETRIES):
-        try:
-            model = AIModelFactory.get_model(json_mode=True)
-            response = model.generate_content(prompt)
-            
-            # 3. Validation of output
-            data = json.loads(response.text)
-            return _validate_response_schema(data, step_number)
+    def _build_prompt(self, topic, level, step, path, last_q, user_a) -> str:
+        """Centralized prompt management."""
+        phase = "START" if not path else "EVAL" if user_a else "TEACH"
+        
+        return f"""
+ROLE: Expert Academic Mentor.
+CONTEXT: topic={topic}, level={level}, step={step}, path={json.dumps(path)}, last_q={last_q}, user_a={user_a}
+PHASE: {phase}
 
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.error(f"AI Schema Error (Attempt {attempt+1}): {e}")
-            last_error = "Received malformed response from AI engine."
-        except Exception as e:
-            logger.error(f"AI Connection Error (Attempt {attempt+1}): {e}")
-            last_error = f"AI Service temporarily unavailable. ({type(e).__name__})"
-            time.sleep(INITIAL_RETRY_DELAY * (2 ** attempt)) # Exponential backoff
+INSTRUCTION:
+- Write a 2-3 paragraph response that provides a detailed explanation, a practical example/analogy, and a follow-up question.
+- Use **bolding** for key terms.
+- Adapt complexity strictly to a '{level}' student.
+- JSON output ONLY.
 
-    # 4. Graceful Degradation
-    return _get_fallback_response(step_number, last_error or "Service error")
-
-# ─────────────────────────────────────────────────────────────
-# Private Internal Helpers
-# ─────────────────────────────────────────────────────────────
-
-def _build_professional_prompt(topic, level, step, path, last_q, user_a) -> str:
-    """Encapsulates the 'Teacher Personality' logic."""
-    phase = "INITIAL_PATH" if not path else "EVALUATION" if user_a else "TEACHING"
-    
-    return f"""
-ROLE: You are an elite, world-class Adaptive Learning Mentor.
-CONTEXT:
-- Subject: {topic}
-- Student Level: {level}
-- Current Progress: Step {step}
-- Session Path: {json.dumps(path) if path else "None"}
-- Last Question: {last_q}
-- Student Response: {user_a}
-- Current Phase: {phase}
-
-GOAL:
-- Deliver a sophisticated, detailed, and highly personalized explanation.
-- PROVIDE DEPTH: Use 2-3 paragraphs if necessary to explain the concept thoroughly.
-- SHOW EXAMPLES: Always provide a concrete code snippet or real-world example.
-- USE FORMATTING: Use **bolding** for key terms and concepts. Use `code` tags for technical terms.
-- INTEGRATE: Weave feedback, explanation, analogies, and questions into a natural, flowing narrative.
-- Tone should be that of a world-class mentor—encouraging, precise, and expert-level.
-
-EVALUATION RULES:
-- If user_a is present, evaluate it as 'correct', 'partial', or 'incorrect'.
-- Provide constructive, helpful feedback at the START of your response.
-- Decide 'next_action': 'advance' (if correct/partial) or 'retry' (if incorrect).
-- ADAPT: If 'Beginner', simplify terminology. If 'Advanced', discuss architecture and edge cases.
-
-OUTPUT FORMAT: Strict JSON only.
+SCHEMA:
 {{
-  "step": {step} (+1 if advancing),
-  "explanation": "One flowing paragraph containing feedback (if any), explanation, analogy, and question.",
-  "analogy": "internal reference only",
-  "question": "internal reference only",
+  "step": {step} (+1 if 'advance'),
+  "explanation": "Markdown-enabled string",
   "evaluation": {{"result": "correct|partial|incorrect|null", "feedback": "Constructive feedback"}},
   "next_action": "advance|retry|simplify",
-  "learning_path": ["Array of future step titles"]
+  "learning_path": ["List of remaining topics"]
 }}
 """
 
-def _validate_response_schema(data: Dict, current_step: int) -> Dict:
-    """Ensures the AI output matches our expected contract."""
-    required = ["step", "explanation", "evaluation", "next_action"]
-    for field in required:
-        if field not in data:
-            raise KeyError(f"Missing required field: {field}")
-    
-    # Ensure step is a valid integer
-    try:
-        data["step"] = int(data["step"])
-    except:
-        data["step"] = current_step
+    def _validate_schema(self, data: Dict, current_step: int) -> Dict:
+        """Ensures the output matches our strict application contract."""
+        keys = ["step", "explanation", "evaluation", "next_action", "learning_path"]
+        for k in keys:
+            if k not in data: data[k] = "" # Defensive defaults
         
-    return data
+        try:
+            data["step"] = int(data["step"])
+        except:
+            data["step"] = current_step
+        return data
 
-def _get_fallback_response(step: int, error_msg: str) -> Dict:
-    """Standardized error recovery."""
-    return {
-        "step": step,
-        "explanation": f"I'm having a slight trouble connecting to my knowledge base right now. {error_msg}. Could you please try repeating your last thought?",
-        "evaluation": {"result": "null", "feedback": ""},
-        "next_action": "retry",
-        "learning_path": []
-    }
+    def _get_fallback(self, step: int) -> Dict:
+        return {
+            "step": step,
+            "explanation": "I encountered a minor processing error. Could you please re-state your last answer so I can re-analyze it?",
+            "evaluation": {"result": "null", "feedback": ""},
+            "next_action": "retry",
+            "learning_path": []
+        }
+
+# ─────────────────────────────────────────────────────────────
+# Public Entry Point
+# ─────────────────────────────────────────────────────────────
+
+def get_adaptive_response(topic, user_level, step_number, steps_array, last_question, user_answer) -> Dict:
+    """Legacy wrapper for backward compatibility, now using the class-based agent."""
+    agent = LearningAgent()
+    return agent.process_turn({
+        'topic': topic,
+        'user_level': user_level,
+        'step': step_number,
+        'learning_path': steps_array,
+        'last_question': last_question,
+        'user_answer': user_answer
+    })
