@@ -1,8 +1,7 @@
 from django.urls import path
-from . import views
+from .views import AdaptiveLearningView, HealthCheckView
 
 urlpatterns = [
-    path('chat/', views.chat, name='chat'),
-    path('learn/', views.learn, name='learn'),
-    path('health/', views.health, name='health'),
+    path('learn/', AdaptiveLearningView.as_view(), name='learn'),
+    path('health/', HealthCheckView.as_view(), name='health'),
 ]
